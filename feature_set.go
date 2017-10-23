@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"github.com/dveselov/mystem"
 	"github.com/mfonda/simhash"
 	"regexp"
@@ -9,6 +10,7 @@ import (
 type MystemFeatureSet struct {
 	Ignores []int          // array of mystem constants to ignore (i.e. mystem.Adjective, mystem.Preposition, mystem.Abbreviation ...)
 	WordReg *regexp.Regexp // regexp for word detection
+	Debug   bool           // if true then produce debug output
 
 	txt []byte // original text
 }
@@ -23,6 +25,17 @@ func NewMystemFeatureSet(txt string, ignores []int) *MystemFeatureSet {
 
 func (m *MystemFeatureSet) GetFeatures() []simhash.Feature {
 	words := m.GetNormalizedWords()
+
+	if m.Debug {
+		println("----------")
+		println(string(m.txt))
+		println("----------")
+		for _, w := range words {
+			print(string(w), " ")
+		}
+		println("----------")
+	}
+
 	features := make([]simhash.Feature, len(words))
 
 	for i, word := range words {
@@ -58,6 +71,8 @@ func (m *MystemFeatureSet) normalize(word []byte) (canonical []byte, good bool) 
 		return word, false // word is not detected, drop it
 	}
 
+	allGrammemes := make([]int, 0)
+
 	for i := 0; i < analyses.Count(); i++ {
 		lemma := analyses.GetLemma(i)
 		grammemes := lemma.StemGram()
@@ -73,6 +88,12 @@ func (m *MystemFeatureSet) normalize(word []byte) (canonical []byte, good bool) 
 				}
 			}
 		}
+
+		allGrammemes = append(allGrammemes, grammemes...)
+	}
+
+	if m.Debug {
+		println(" -->", string(word), fmt.Sprintf("%v", allGrammemes))
 	}
 
 	return []byte(analyses.GetLemma(0).Text()), true // return canonical form of word

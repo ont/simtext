@@ -4,93 +4,132 @@ import (
 	"fmt"
 	"github.com/dveselov/mystem"
 	"github.com/mfonda/simhash"
-	"golang.org/x/text/unicode/norm"
 	"io/ioutil"
-	"regexp"
-	"strings"
+	"os"
+	"strconv"
 )
 
-func GetHash(fname string) uint64 {
-	dat, _ := ioutil.ReadFile(fname)
-	//txt := strip.StripTags(string(dat))
-	txt := string(dat)
-
-	r := regexp.MustCompile("<[^>]+>|[^а-яА-Я]+")
-	txt = r.ReplaceAllString(txt, " ")
-
-	println("---------------")
-	println(txt)
-	println("---------------")
-
-	//txt := "проверяется доступное место на сервере"
-	words := strings.Fields(txt)
-
-	wordsCanonical := make([]string, 0, len(words))
-
-	for _, word := range words {
-		analyses := mystem.NewAnalyses(word)
-
-		bad := false
-		arr := make([]int, 0)
-		for i := 0; i < analyses.Count(); i++ {
-			lemma := analyses.GetLemma(i)
-			grammemes := lemma.StemGram()
-
-			arr = append(arr, grammemes...)
-			if len(grammemes) == 0 {
-				bad = true
-				break
-			}
-			for _, g := range grammemes {
-				if /*g == mystem.Conjunction ||*/ g == mystem.Interjunction || g == mystem.Preposition || g == mystem.Abbreviation || g == mystem.Adjective {
-					//fmt.Println("--->", lemma.Text())
-					bad = true
-					break
-				}
-			}
-
-			if bad {
-				break
-			}
-
-			//fmt.Printf("%s - %s %v (%d)\n", word, lemma.Text(), grammemes, analyses.Count())
-		}
-		if !bad {
-			fmt.Print(analyses.GetLemma(0).Text(), " ", arr, " ")
-			wordsCanonical = append(wordsCanonical, analyses.GetLemma(0).Text())
-			//fmt.Print(analyses.GetLemma(0).Text(), " ")
-		}
-
-		analyses.Close()
-	}
-
-	txtCanonical := strings.Join(wordsCanonical, " ")
-	println("\n---------------")
-	fmt.Printf("%v %v\n", txtCanonical, []byte(txtCanonical))
-	println("---------------")
-	hash := simhash.Simhash(simhash.NewUnicodeWordFeatureSet([]byte(txtCanonical), norm.NFC))
-
-	return hash
+type Group struct {
+	hash  uint64
+	names []string
 }
 
 func main() {
-	//hash1 := GetHash("test.txt")
-	//hash2 := GetHash("test2.txt")
-	//println(simhash.Compare(hash1, hash2))
-
-	m := NewMystemFeatureSet("<b>Тестовая, строка... ? слов123!! 123 bestмыыыыхх", []int{})
-	for _, word := range m.GetWords() {
-		println(string(word))
-	}
-	println("---------------")
-	for _, word := range m.GetNormalizedWords() {
-		println(string(word))
+	if len(os.Args) < 3 {
+		fmt.Printf("Usage: %s [threshold] [dir]\n", os.Args[0])
+		os.Exit(1)
 	}
 
-	//fmt.Println(fmt.Sprintf("Analyze of '%s':", "маша"))
-	//for i := 0; i < analyses.Count(); i++ {
-	//    lemma := analyses.GetLemma(i)
-	//    grammemes := lemma.StemGram()
-	//    fmt.Println(fmt.Sprintf("%d. %s - %v", i+1, lemma.Text(), grammemes))
-	//}
+	thresh, err := strconv.Atoi(os.Args[1])
+	if err != nil {
+		fmt.Printf("Error: value %s is not integer\n", os.Args[1])
+		os.Exit(1)
+	}
+
+	dir := os.Args[2]
+	files, err := ioutil.ReadDir(dir)
+	if err != nil {
+		fmt.Println(err.Error())
+		os.Exit(1)
+	}
+
+	if os.Getenv("DEBUG") != "" {
+		debugFiles(dir, files)
+		os.Exit(0)
+	}
+
+	findGroups(dir, files, thresh)
+}
+
+func debugFiles(dir string, files []os.FileInfo) {
+	for _, file := range files {
+		data, err := ioutil.ReadFile(dir + "/" + file.Name())
+
+		if err != nil {
+			fmt.Println(err.Error())
+			os.Exit(1)
+		}
+
+		hash := calcHash(data, true)
+
+		fmt.Printf("%s --> %s", file.Name(), strconv.FormatInt(int64(hash), 2))
+	}
+}
+
+func findGroups(dir string, files []os.FileInfo, thresh int) {
+	groups := make([]*Group, 0)
+
+	for _, file := range files {
+		data, err := ioutil.ReadFile(dir + "/" + file.Name())
+
+		if err != nil {
+			fmt.Println(err.Error())
+			os.Exit(1)
+		}
+
+		group := findGroup(groups, data, thresh)
+
+		if group == nil {
+			group = newGroup(data)
+			groups = append(groups, group)
+		}
+
+		group.names = append(group.names, file.Name())
+	}
+
+	printGroups(groups)
+}
+
+func findGroup(groups []*Group, txt []byte, thresh int) *Group {
+	hash := calcHash(txt, false)
+
+	for _, group := range groups {
+		if simhash.Compare(hash, group.hash) < uint8(thresh) {
+			return group
+		}
+	}
+
+	return nil
+}
+
+func newGroup(txt []byte) *Group {
+	return &Group{
+		hash:  calcHash(txt, false),
+		names: make([]string, 0),
+	}
+}
+
+func calcHash(txt []byte, debug bool) uint64 {
+	fset := NewMystemFeatureSet(string(txt), []int{
+		mystem.Interjunction,
+		mystem.Preposition,
+		mystem.Abbreviation,
+		mystem.Adjective,
+		mystem.Particle,
+		mystem.AdjPronoun,
+	})
+
+	fset.Debug = debug
+
+	return simhash.Simhash(fset)
+}
+
+func printGroups(groups []*Group) {
+	var total int
+
+	for _, group := range groups {
+		if len(group.names) == 1 {
+			continue
+		}
+
+		total++
+
+		fmt.Println("-----------")
+		for _, name := range group.names {
+			fmt.Println(name)
+		}
+	}
+
+	fmt.Println("===============")
+	fmt.Printf("Total: %d groups\n", total)
 }
