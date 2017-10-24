@@ -38,7 +38,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	println(*cleanFlag)
 	switch {
 	case *debugFlag:
 		debugFiles(files)
@@ -164,14 +163,12 @@ func debugFiles(files []*HashedFile) {
 }
 
 func cleanFiles(files []*HashedFile) {
-	println("here")
 	for _, file := range files {
 		text := file.GetCleanText()
 
 		ext := filepath.Ext(file.path)
 		path := strings.TrimSuffix(file.path, ext)
 
-		println(path + ".clean" + ext)
 		err := ioutil.WriteFile(path+".clean"+ext, []byte(text), 0644)
 		if err != nil {
 			panic(err) // TODO: normal err handling
