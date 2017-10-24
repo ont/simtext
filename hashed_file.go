@@ -41,8 +41,36 @@ func (f *HashedFile) RefreshHash() error {
 	return nil
 }
 
-func (f *HashedFile) calcHash(txt []byte) uint64 {
-	fset := NewMystemFeatureSet(string(txt), []int{
+func (f *HashedFile) calcHash(data []byte) uint64 {
+	fset := f.newMystemFeatureSet(data)
+
+	//fset.Debug = debug
+	fset.TailPercent = 0.25
+	fset.TailLoss = 3
+
+	return simhash.Simhash(fset)
+}
+
+// TODO: remove panic
+func (f *HashedFile) GetCleanText() string {
+	data, err := ioutil.ReadFile(f.path)
+	if err != nil {
+		panic(err)
+	}
+
+	fset := f.newMystemFeatureSet(data)
+	words := fset.GetNormalizedWords()
+
+	text := ""
+	for _, word := range words {
+		text += string(word) + " "
+	}
+
+	return text
+}
+
+func (f *HashedFile) newMystemFeatureSet(data []byte) *MystemFeatureSet {
+	return NewMystemFeatureSet(string(data), []int{
 		mystem.Interjunction,
 		mystem.Preposition,
 		mystem.Abbreviation,
@@ -50,10 +78,4 @@ func (f *HashedFile) calcHash(txt []byte) uint64 {
 		mystem.Particle,
 		mystem.AdjPronoun,
 	})
-
-	//fset.Debug = debug
-	fset.TailPercent = 0.25
-	fset.TailLoss = 3
-
-	return simhash.Simhash(fset)
 }

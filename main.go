@@ -7,12 +7,15 @@ import (
 	"io/ioutil"
 	"math"
 	"os"
+	"path/filepath"
+	"strings"
 )
 
 var (
 	debugFlag     = flag.Bool("debug", false, "Run debug mode")
+	cleanFlag     = flag.Bool("clean", false, "Clear all files from target dir and save them with .clean suffix")
 	cytoscapeFlag = flag.Bool("cytoscape", false, "Output for cytoscape.js")
-	gephiFlag     = flag.String("gephi", "./", "Path for CSV files for Gephi to output to.")
+	gephiFlag     = flag.String("gephi", "", "Path for CSV files for Gephi to output to.")
 	threshFlag    = flag.Int("thresh", 0, "Threshold for groupping")
 	usageFunc     = func() {
 		fmt.Printf("Usage: %s [OPTIONS] directory\n", os.Args[0])
@@ -35,9 +38,13 @@ func main() {
 		os.Exit(1)
 	}
 
+	println(*cleanFlag)
 	switch {
 	case *debugFlag:
 		debugFiles(files)
+
+	case *cleanFlag:
+		cleanFiles(files) // TODO: not optimal (clean + hash + final clean)
 
 	case *cytoscapeFlag:
 		cytoscapeOutput(files)
@@ -154,4 +161,20 @@ func debugFiles(files []*HashedFile) {
 
 	//	fmt.Printf("%s --> %s\n", file.Name(), fmt.Sprintf("%064b", hash))
 	//}
+}
+
+func cleanFiles(files []*HashedFile) {
+	println("here")
+	for _, file := range files {
+		text := file.GetCleanText()
+
+		ext := filepath.Ext(file.path)
+		path := strings.TrimSuffix(file.path, ext)
+
+		println(path + ".clean" + ext)
+		err := ioutil.WriteFile(path+".clean"+ext, []byte(text), 0644)
+		if err != nil {
+			panic(err) // TODO: normal err handling
+		}
+	}
 }
