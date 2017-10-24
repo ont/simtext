@@ -1,135 +1,157 @@
 package main
 
 import (
+	"encoding/csv"
+	"flag"
 	"fmt"
-	"github.com/dveselov/mystem"
-	"github.com/mfonda/simhash"
 	"io/ioutil"
+	"math"
 	"os"
-	"strconv"
 )
 
-type Group struct {
-	hash  uint64
-	names []string
-}
+var (
+	debugFlag     = flag.Bool("debug", false, "Run debug mode")
+	cytoscapeFlag = flag.Bool("cytoscape", false, "Output for cytoscape.js")
+	gephiFlag     = flag.String("gephi", "./", "Path for CSV files for Gephi to output to.")
+	threshFlag    = flag.Int("thresh", 0, "Threshold for groupping")
+	usageFunc     = func() {
+		fmt.Printf("Usage: %s [OPTIONS] directory\n", os.Args[0])
+		flag.PrintDefaults()
+	}
+)
 
 func main() {
-	if len(os.Args) < 3 {
-		fmt.Printf("Usage: %s [threshold] [dir]\n", os.Args[0])
+	flag.Usage = usageFunc
+	flag.Parse()
+
+	if flag.NArg() < 1 {
+		flag.Usage()
 		os.Exit(1)
 	}
 
-	thresh, err := strconv.Atoi(os.Args[1])
-	if err != nil {
-		fmt.Printf("Error: value %s is not integer\n", os.Args[1])
-		os.Exit(1)
-	}
-
-	dir := os.Args[2]
-	files, err := ioutil.ReadDir(dir)
+	files, err := readHashedFiles(flag.Arg(0))
 	if err != nil {
 		fmt.Println(err.Error())
 		os.Exit(1)
 	}
 
-	if os.Getenv("DEBUG") != "" {
-		debugFiles(dir, files)
-		os.Exit(0)
-	}
+	switch {
+	case *debugFlag:
+		debugFiles(files)
 
-	findGroups(dir, files, thresh)
+	case *cytoscapeFlag:
+		cytoscapeOutput(files)
+
+	case *gephiFlag != "":
+		outputGephiCSV(*gephiFlag, files)
+
+	default:
+		flag.Usage()
+		os.Exit(1)
+
+	}
 }
 
-func debugFiles(dir string, files []os.FileInfo) {
+func readHashedFiles(dir string) ([]*HashedFile, error) {
+	files, err := ioutil.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+
+	hashedFiles := make([]*HashedFile, 0)
+
 	for _, file := range files {
-		data, err := ioutil.ReadFile(dir + "/" + file.Name())
-
+		hf, err := NewHashedFile(dir + "/" + file.Name())
 		if err != nil {
-			fmt.Println(err.Error())
-			os.Exit(1)
+			return nil, err
 		}
+		hashedFiles = append(hashedFiles, hf)
 
-		hash := calcHash(data, true)
+		//if i > 500 {
+		//	break
+		//}
+	}
 
-		fmt.Printf("%s --> %s", file.Name(), strconv.FormatInt(int64(hash), 2))
+	return hashedFiles, nil
+}
+
+func outputGephiCSV(path string, files []*HashedFile) {
+	graph := buildGraph(files)
+
+	outputNodes(path, graph)
+	outputEdges(path, graph)
+
+}
+
+func outputNodes(path string, graph *Graph) {
+	file, err := os.Create(path + "/graph_nodes.csv")
+	if err != nil {
+		fmt.Println(err.Error())
+		os.Exit(1)
+	}
+	defer file.Close()
+
+	cw := csv.NewWriter(file)
+	defer cw.Flush()
+
+	cw.Write([]string{"Id", "Path", "Hash"})
+	for _, node := range graph.nodes {
+		cw.Write([]string{node.Name, node.path, fmt.Sprintf("%064b", node.Hash)})
 	}
 }
 
-func findGroups(dir string, files []os.FileInfo, thresh int) {
-	groups := make([]*Group, 0)
+func outputEdges(path string, graph *Graph) {
+	file, err := os.Create(path + "/graph_edges.csv")
+	if err != nil {
+		fmt.Println(err.Error())
+		os.Exit(1)
+	}
+	defer file.Close()
+
+	cw := csv.NewWriter(file)
+	defer cw.Flush()
+
+	cw.Write([]string{"Source", "Target", "Id", "Weight"})
+	for _, edge := range graph.edges {
+		cw.Write([]string{edge.Src.Name, edge.Dst.Name, edge.Src.Name + "-" + edge.Dst.Name, fmt.Sprintf("%f", math.Exp(-float64(edge.Dist)/10)*20)})
+	}
+}
+
+func cytoscapeOutput(files []*HashedFile) {
+	graph := buildGraph(files)
+
+	json, err := graph.toJSON()
+	if err != nil {
+		fmt.Println(err.Error())
+		os.Exit(1)
+	}
+
+	fmt.Println(json)
+}
+
+func buildGraph(files []*HashedFile) *Graph {
+	graph := NewGraph()
 
 	for _, file := range files {
-		data, err := ioutil.ReadFile(dir + "/" + file.Name())
-
-		if err != nil {
-			fmt.Println(err.Error())
-			os.Exit(1)
-		}
-
-		group := findGroup(groups, data, thresh)
-
-		if group == nil {
-			group = newGroup(data)
-			groups = append(groups, group)
-		}
-
-		group.names = append(group.names, file.Name())
+		graph.AddNode(file)
 	}
+	graph.BuildEdges()
 
-	printGroups(groups)
+	return graph
 }
 
-func findGroup(groups []*Group, txt []byte, thresh int) *Group {
-	hash := calcHash(txt, false)
+func debugFiles(files []*HashedFile) {
+	//for _, file := range files {
+	//	data, err := ioutil.ReadFile(dir + "/" + file.Name())
 
-	for _, group := range groups {
-		if simhash.Compare(hash, group.hash) < uint8(thresh) {
-			return group
-		}
-	}
+	//	if err != nil {
+	//		fmt.Println(err.Error())
+	//		os.Exit(1)
+	//	}
 
-	return nil
-}
+	//	fmt.Printf("------------\n")
+	//	hash := calcHash(data, true)
 
-func newGroup(txt []byte) *Group {
-	return &Group{
-		hash:  calcHash(txt, false),
-		names: make([]string, 0),
-	}
-}
-
-func calcHash(txt []byte, debug bool) uint64 {
-	fset := NewMystemFeatureSet(string(txt), []int{
-		mystem.Interjunction,
-		mystem.Preposition,
-		mystem.Abbreviation,
-		mystem.Adjective,
-		mystem.Particle,
-		mystem.AdjPronoun,
-	})
-
-	fset.Debug = debug
-
-	return simhash.Simhash(fset)
-}
-
-func printGroups(groups []*Group) {
-	var total int
-
-	for _, group := range groups {
-		if len(group.names) == 1 {
-			continue
-		}
-
-		total++
-
-		fmt.Println("-----------")
-		for _, name := range group.names {
-			fmt.Println(name)
-		}
-	}
-
-	fmt.Println("===============")
-	fmt.Printf("Total: %d groups\n", total)
+	//	fmt.Printf("%s --> %s\n", file.Name(), fmt.Sprintf("%064b", hash))
+	//}
 }
